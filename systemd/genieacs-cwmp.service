@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run as root: sudo bash install.sh"
+  exit 1
+fi
+
+echo "=============================================="
+echo "GenieACS Panel production installer for Ubuntu 22.04"
+echo "=============================================="
+
+# ----- 1. Install base packages -----
+apt-get update
+apt-get install -y \
+  ca-certificates \
+  curl \
+  wget \
+  gnupg \
+  git \
+  lsb-release \
+  software-properties-common \
+  ufw \
+  nginx \
+  certbot \
+  python3-certbot-nginx
+
+# ----- 2. Install Node.js 20 LTS from NodeSource -----
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+# ----- 3. Install MongoDB 8.0 -----
+curl -fsSL https://pgp.mongodb.com/server-8.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/8.0 multiverse" \
+  > /etc/apt/sources.list.d/mongodb-org-8.0.list
+apt-get update
+apt-get install -y mongodb-org mongodb-org-server mongodb-org-shell mongodb-org-mongos mongodb-org-tools
+systemctl enable --now mongod
+
+# ----- 4. Install GenieACS -----
+npm install -g genieacs@1.2.13
+
+# ----- 5. Create GenieACS user and folders -----
+id -u genieacs >/dev/null 2>&1 || useradd --system --home /opt/genieacs --shell /usr/sbin/nologin genieacs
+mkdir -p /opt/genieacs /var/log/genieacs /var/lib/genieacs
+chown -R genieacs:genieacs /opt/genieacs /var/log/genieacs /var/lib/genieacs
+
+# ----- 6. Generate JWT secret -----
+JWT_SECRET=$(openssl rand -base64 64 | tr -d '\n')
+cat > /opt/genieacs/genieacs.env <<EOF
+NODE_ENV=production
+PORT=3000
+GENIEACS_LOG_FILE=/var/log/genieacs/genieacs.log
+GENIEACS_UI_HTTP_PORT=3000
+GENIEACS_CWMP_PORT=7547
+GENIEACS_NBI_PORT=7557
+GENIEACS_FS_PORT=7567
+JWT_SECRET=${JWT_SECRET}
+EOF
+
+# ----- 7. Clone or update application -----
+APP_DIR="/opt/genieacs-panel"
+if [ -d "$APP_DIR/.git" ]; then
+  echo "Project already present. Updating repository..."
+  cd "$APP_DIR"
+  git pull --ff-only || true
+else
+  git clone https://github.com/your-user/genieacs-panel.git "$APP_DIR"
+fi
+
+# ----- 8. Backend config -----
+BACKEND_DIR="$APP_DIR/backend"
+cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
+cat > "$BACKEND_DIR/.env" <<EOF
+PORT=5000
+NODE_ENV=production
+MONGODB_URI=mongodb://127.0.0.1:27017/genieacs_panel
+JWT_SECRET=${JWT_SECRET}
+JWT_EXPIRES_IN=7d
+GENIEACS_NBI_URL=http://127.0.0.1:7557
+GENIEACS_UI_URL=http://127.0.0.1:3000
+GENIEACS_FS_URL=http://127.0.0.1:7567
+DEFAULT_ADMIN_EMAIL=admin@local
+DEFAULT_ADMIN_PASSWORD=Admin123!
+EOF
+
+cd "$BACKEND_DIR"
+npm install --omit=dev
+
+# ----- 9. Frontend config and build -----
+FRONTEND_DIR="$APP_DIR/frontend"
+if [ ! -f "$FRONTEND_DIR/.env" ]; then
+  cp "$FRONTEND_DIR/.env.example" "$FRONTEND_DIR/.env"
+fi
+cat > "$FRONTEND_DIR/.env" <<EOF
+VITE_API_URL=http://127.0.0.1:5000/api
+EOF
+
+cd "$FRONTEND_DIR"
+npm install
+npm run build
+
+# ----- 10. Install service files -----
+cp "$APP_DIR/systemd/genieacs-cwmp.service" /etc/systemd/system/
+cp "$APP_DIR/systemd/genieacs-nbi.service" /etc/systemd/system/
+cp "$APP_DIR/systemd/genieacs-fs.service" /etc/systemd/system/
+cp "$APP_DIR/systemd/genieacs-ui.service" /etc/systemd/system/
+cp "$APP_DIR/systemd/genieacs-panel.service" /etc/systemd/system/
+
+# ----- 11. Configure Nginx -----
+cp "$APP_DIR/nginx/genieacs-panel.conf" /etc/nginx/conf.d/genieacs-panel.conf
+rm -f /etc/nginx/sites-enabled/default || true
+nginx -t
+
+# ----- 12. Firewall -----
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow 7547/tcp
+ufw --force enable
+
+# ----- 13. Start services -----
+systemctl daemon-reload
+systemctl enable --now genieacs-cwmp
+systemctl enable --now genieacs-nbi
+systemctl enable --now genieacs-fs
+systemctl enable --now genieacs-ui
+systemctl enable --now genieacs-panel
+systemctl enable --now nginx
+
+# ----- 14. Final info -----
+echo "=============================================="
+echo "Installation completed successfully!"
+echo "Backend health: http://127.0.0.1:5000/health"
+echo "Frontend: http://127.0.0.1"
+echo "Default login: admin@local / Admin123!"
+echo "Important: change the default password and JWT secret before production use."
+echo "=============================================="

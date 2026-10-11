@@ -1,0 +1,89 @@
+# GenieACS Panel
+
+Modern web management dashboard for GenieACS (TR-069 Auto Configuration Server).
+
+## Overview
+GenieACS Panel is a modern operational dashboard for ISP and network teams that need to manage CPE devices such as routers, ONTs, gateways, and other devices handled through GenieACS.
+
+The stack includes:
+- Node.js + Express backend
+- React + Tailwind frontend
+- MongoDB database
+- Nginx reverse proxy
+- systemd service orchestration
+- JWT-based auth
+
+## Features
+- Device dashboard and online/offline monitoring
+- Search and filter devices
+- Task scheduling and execution
+- Preset management
+- User management with role-based access
+- Log viewer for GenieACS services
+- Nginx + HTTPS support
+- Production-oriented installation script for Ubuntu 22.04
+
+## Prerequisites
+- Ubuntu 22.04 LTS
+- Root access
+- Domain or public IP for HTTPS setup
+
+## Quick installation
+```bash
+sudo bash install.sh
+```
+
+## HTTPS configuration
+After installation, generate a certificate:
+
+```bash
+sudo certbot --nginx -d your-domain.example.com
+sudo systemctl reload nginx
+```
+
+Then update `/etc/nginx/conf.d/genieacs-panel.conf` with your domain name.
+
+## Default login
+- Email: admin@local
+- Password: Admin123!
+
+## Important security notes
+Before production use:
+- change the default admin password
+- change JWT secret in `/opt/genieacs-panel/backend/.env`
+- restrict UFW to required ports
+- avoid exposing GenieACS UI directly on port 3000
+
+## Services
+- genieacs-cwmp
+- genieacs-nbi
+- genieacs-fs
+- genieacs-ui
+- genieacs-panel
+
+## Local development
+```bash
+cd backend && npm install && npm run dev
+cd frontend && npm install && npm run dev
+```
+
+## Health checks
+```bash
+curl http://127.0.0.1:5000/health
+systemctl status genieacs-panel
+```
+
+## Supported target versions
+- Ubuntu 22.04 LTS
+- Node.js 20.x
+- MongoDB 8.0
+- GenieACS 1.2.13+
+
+## Notes
+This project is designed as a production-ready starter and can be extended with:
+- device detail modal
+- firmware upload integration
+- queue retry logic
+- audit log viewer
+- billing or inventory integrations
+- WebSocket live monitoring
